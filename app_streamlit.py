@@ -49,15 +49,18 @@ BRANDS = {
 ALL_BRAND_WORDS = ('ELLIPS',) + tuple(BRANDS)  # Ellips tidak ada di halaman ini, tapi file-nya tetap harus ditolak
 
 IMPORTS = {
-    'Raw TAP': dict(sub='dari file TAP_GMV', module='import_raw_tap_unified', types=['xlsx'], auto_brand=True,
+    'Raw TAP': dict(sub='dari file TAP_GMV', module='import_raw_tap_unified', types=['xlsx'], auto_brand=True, zip_only=True,
                     note='Baris GMV ≠ 0 ditambah di bawah data yang ada, tanpa cek duplikat. Jangan import file '
                          'yang rentang tanggalnya tumpang tindih dengan yang sudah masuk.'),
     'Raw SC': dict(sub='dari file SC_GMV', module='import_raw_data_sc_unified', types=['xlsx', 'csv'], auto_brand=True,
+                   zip_only=False,  # modul SC sendiri bisa baca CSV walau namanya .xlsx
                    note='Semua order ditambah di bawah data yang ada, tanpa cek duplikat. Jangan import file '
                         'yang rentang tanggalnya tumpang tindih dengan yang sudah masuk.'),
     'Live Streaming': dict(sub='dari file TAP_LS', module='import_live_streaming_unified', types=['xlsx'], auto_brand=False,
+                           zip_only=True,
                            note='Room yang sudah ada dilewati; room lama hanya diperbarui GMV-nya kalau angka terbaru lebih besar.'),
     'Video Bank': dict(sub='dari file TAP_SV / SC_SV', module='import_video_bank_unified', types=['xlsx'], auto_brand=False,
+                       zip_only=True,
                        note='Video yang sudah ada dilewati; video lama hanya diperbarui GMV-nya kalau angka terbaru lebih besar.'),
 }
 TARGET_ID_MODULES = ('import_live_streaming_unified', 'import_video_bank_unified')
@@ -186,6 +189,26 @@ def credentials_file():
 def detect_brand(filename):
     low = filename.lower()
     return next((b for b in ALL_BRAND_WORDS if b.lower() in low), None)
+
+
+def sniff_xlsx(upload):
+    """None kalau isinya memang xlsx (arsip zip); selain itu penjelasan singkat kenapa import bakal gagal
+    (BadZipFile: File is not a zip file)."""
+    buf = upload.getbuffer()
+    head = bytes(buf[:2048])
+    if head[:2] == b'PK':
+        return None
+    mb = f'{upload.size / 1024 ** 2:.1f} MB'
+    if head[:4] == b'\xd0\xcf\x11\xe0':
+        return f'File ({mb}) bukan .xlsx: formatnya Excel lama (.xls) atau diberi password. Buka di Excel lalu Save As .xlsx.'
+    try:
+        first = head.decode('utf-8-sig').splitlines()[0]
+        if any(c in first for c in ',;\t'):
+            return (f'File ({mb}) ternyata CSV yang diberi ekstensi .xlsx. Export ulang sebagai .xlsx, '
+                    'atau buka di Excel lalu Save As .xlsx.')
+    except (UnicodeDecodeError, IndexError):
+        pass
+    return f'File ({mb}) bukan .xlsx yang valid: rusak atau upload terpotong. Upload ulang atau export ulang dari TikTok.'
 
 
 def first_name(user):
@@ -349,6 +372,10 @@ def import_page(brand):
             msg = (f'File terdeteksi {detected}, tetapi brand yang dipilih {brand}.' if detected
                    else f'Nama file harus memuat kata "{brand.lower()}".')
             st.markdown(f'<div class="banner bad">{msg}</div>', unsafe_allow_html=True)
+        problem = sniff_xlsx(upload) if upload and cfg['zip_only'] else None
+        if problem:
+            st.markdown(f'<div class="banner bad">{problem}</div>', unsafe_allow_html=True)
+        mismatch = mismatch or bool(problem)
         st.markdown(f'<div class="banner">{cfg["note"]}</div>', unsafe_allow_html=True)
 
         confirmed = st.checkbox(f'File dan bulan sudah benar, import langsung menulis ke sheet {b["name"]}.',
