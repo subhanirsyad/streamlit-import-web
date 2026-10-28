@@ -16,6 +16,7 @@ import contextlib
 import datetime
 import importlib
 import io
+import re
 import shutil
 import sys
 import tempfile
@@ -180,10 +181,23 @@ def credentials_file():
         return str(local)
     if has_secret('gcp_service_account'):
         import json
+        info = dict(st.secrets['gcp_service_account'])
+        info['private_key'] = fix_pem(info.get('private_key', ''))
         path = Path(tempfile.mkdtemp(prefix='sa_')) / 'credentials.json'
-        path.write_text(json.dumps(dict(st.secrets['gcp_service_account'])))
+        path.write_text(json.dumps(info))
         return str(path)
     return None
+
+
+def fix_pem(key):
+    """Secrets TOML sering merusak baris baru private key (\\n jadi teks biasa, atau jadi spasi) ->
+    error 'MalformedFraming'. Bangun ulang PEM yang valid dari isi base64-nya."""
+    m = re.search(r'-----BEGIN ([A-Z ]+)-----(.*?)-----END \1-----', key, re.S)
+    if not m:
+        return key
+    body = re.sub(r'\\n|\s', '', m.group(2))
+    lines = '\n'.join(body[i:i + 64] for i in range(0, len(body), 64))
+    return f'-----BEGIN {m.group(1)}-----\n{lines}\n-----END {m.group(1)}-----\n'
 
 
 def detect_brand(filename):
